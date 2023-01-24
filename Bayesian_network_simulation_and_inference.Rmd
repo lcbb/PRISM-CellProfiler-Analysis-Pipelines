@@ -1,0 +1,622 @@
+---
+title: "Linear model testing"
+output: html_notebook
+---
+
+```{r}
+library(arules)
+library(dplyr)
+library(dbscan)
+library(data.table)
+library(umap)
+library(stats)
+library(bnlearn)
+library(tidyr)
+library(gplots)
+library(ggplot2)
+library(RColorBrewer)
+library(flifo)
+library(pracma)
+```
+
+FUNCTIONS
+
+```{r}
+#Function to sample N points from a modified gamma distribution with a zero
+#probability of P, and shape/scale parameters given by sh and sc
+Sample<-function(N=1,P=0.8,sh=2,sc=0.5)
+{
+  samp<-numeric(N)
+  for(n in 1:N)
+  {
+    a<-runif(1)
+    if (a>P) {samp[n]<-0}
+    else {samp[n]<-rgamma(1,shape = sh,scale = sc)}
+  }
+return(as.matrix(samp))
+}
+
+#Function to sample N child variable values from a gamma distribution whose 
+#parameters depend on the values of P parent nodes
+#Poseff-boolean length P, whether parent-child dependences are positive
+#Parents - dataframe NxP composed of values for parent nodes
+#effsize - numeric length P, interaction coefficients (alpha)
+CondSamp<-function(Poseff,Parents,effsize=rep(1,length(Poseff)),baseP=0.8,baseSh=2,baseSc=0.5)
+{
+  N<-dim(Parents)[1]
+  medians<-numeric(length=dim(Parents)[2])
+  for (parent in 1:dim(Parents)[2]){medians[parent]<-median(Parents[,parent])}
+  Res<-numeric(length = N)
+  if(length(Poseff)!=dim(Parents)[2]){stop("Number of Parents must be consistent")}
+  else
+  {
+    for (n in 1:N)
+    {
+    Pcorr<-1
+    ScaleCorr<-1
+      for (parent in 1:dim(Parents)[2])
+      {
+        a<-Parents[n,parent]
+        m<-medians[parent]
+        if (Poseff[parent]){b<-(a+1)/(m+1)}       
+        else{b<-(m+1)/(a+1)}
+        b<-b^effsize[parent]
+        Pcorr<-Pcorr/b
+        ScaleCorr<-ScaleCorr*b
+      }
+      Res[n]<-Sample(N=1,P=baseP^Pcorr,sh=baseSh,sc=baseSc*ScaleCorr)
+    }
+    return(as.matrix(Res))
+  }
+}
+
+Disc<-function(data,quantiles)
+  #Discretize with zeroes as separate bin and the rest into quantiles
+{
+  dat<-as.data.frame(data)
+  Dis<-dat
+  for (col in 1:dim(dat)[2])
+  {
+  d<-as.matrix(dat[,col])
+  datpos<-subset(d,d>0)
+  a<-arules::discretize(datpos,method="frequency",breaks=quantiles,labels=FALSE)
+  count<-1
+  for(n in 1:length(d))
+  {
+    if(d[n]==0){Dis[n,col]<-0}
+    else{
+      Dis[n,col]<-a[count]
+      count<-count+1
+    }
+  }  
+  }
+  return(Dis)
+}
+
+# Function to calculate correlation between two discretized variables when controlling for others
+# data = discretized data frame/table whose first columns are variable values
+# from, to - column numbers corresponding to the nodes whose correlation you measure
+# controls - vector of column numbers corresponding to the nodes for which you need
+# to control
+
+EdgeStrength<-function(data,from,to,controls,discsize=10,samples=min(10*discsize^length(controls),50),tolerance=0.5)
+{
+  if (is.null(controls)){
+    dat<-as.data.frame(data)[,c(from,to)]
+    dat<-Disc(dat,discsize)
+    return(cor(dat[,1],dat[,2]))
+  }
+  else{
+  dat<-as.data.frame(data)[,c(from,to,controls)]
+  dat<-Disc(dat,discsize)
+  value<-0
+  count<-0
+  Nc<-length(controls)
+  N<-dim(dat)[1]
+  countbad<-0
+  for (i in 1:samples)
+  {
+    if(i%%10==0){print(i)}
+    if(Nc==1){x<-sample(t(dat[,3]),1)}
+    else{x<-sample_n(dat[,3:(Nc+2)],1)}
+    ind<-rep(FALSE,N)
+    for (k in 1:N)
+    { pair<-rbind(as.numeric(x),as.numeric(dat[k,3:(Nc+2)]))
+      ind[k]<-(dist(pair,method = "manhattan")<=tolerance)}
+    if(sum(ind)<2){countbad<-countbad+1
+                    next}
+    sub<-subset(dat,ind)
+    n<-dim(sub)[1]
+    c<-cor(sub[,1],sub[,2])
+    if(!is.na(c))
+    {
+    count<-count+1
+    value<-value+c
+    print(c,value/count)
+    }
+    else{countbad<-countbad+1}
+  }
+  print(countbad)
+  return(value/count)
+  }
+}
+
+# Function to calculate correlation between two continuous variables when controlling for others
+# data = data frame/table whose first columns are variable values. May have other 
+# non-node values (e.g. well, treatment group) in later columns
+# from, to - column numbers corresponding to the nodes whose correlation you measure
+# controls - vector of column numbers corresponding to the nodes for which you need
+# to control
+
+EdgeStrengthCont<-function(data,from,to,controls,tolerance=0.5,samples=min(20*(1/tolerance)^length(controls),300),onlypos=FALSE)
+{
+  dat<-as.data.frame(data)[,c(from,to,controls)]
+  if(onlypos){dat<-subset(dat,dat[,1]>0 & dat[,2]>0)}
+  if (is.null(controls)){
+    return(cor(dat[,1],dat[,2]))
+  }
+  else{
+  value<-0
+  count<-0
+  countbad<-0
+  Nc<-length(controls)
+  N<-dim(dat)[1]
+  for (i in 1:samples)
+  {
+    if(i%%10==0){print(i)}
+    if(Nc==1){x<-sample(t(dat[,3]),1)}
+    else{x<-sample_n(dat[,3:(Nc+2)],1)}
+    sub<-dat[FALSE,]
+    for (k in 1:N)
+    { pair<-rbind(as.numeric(x),as.numeric(dat[k,3:(Nc+2)]))
+      if(dist(pair,method = "euclidean")<=tolerance*sqrt(Nc)){sub<-rbind(sub,dat[k,])}
+    }
+    n<-dim(sub)[1]
+    if(n<2){countbad<-countbad+1
+                    next}
+    c<-cor(sub[,1],sub[,2])
+    if(!is.na(c))
+    {
+    count<-count+1
+    value<-value+c
+    print(c(c,value/count))
+    }
+    else{countbad<-countbad+1}
+  }
+  print(countbad)
+  return(value/count)
+  }
+}
+
+# Function to estimate the effect
+# data = data frame/table whose first columns are variable values. May have other 
+# non-node values (e.g. well, treatment group) in later columns
+# from, to - column numbers corresponding to the nodes whose correlation you measure
+# controls - vector of column numbers corresponding to the nodes for which you need
+# to control
+
+TreatStrengthCont<-function(data,Treats,target,controls,Compare="NT",tolerance=0.5,
+                            samples=min(10*(1/tolerance)^length(controls),200),onlypos=controls)
+{
+  Nc<-length(controls)
+  dat1<-as.data.frame(subset(data,data$Trt%in%Treats))
+  dat2<-as.data.frame(subset(data,data$Trt==Compare))
+  
+  if(!is.null(onlypos)){
+    for (con in onlypos)
+    { dat1<-subset(dat1,dat1[,con]>0)
+      dat2<-subset(dat2,dat2[,con]>0)}
+  }
+  dat1<-dat1[,c(target,controls)]
+  dat2<-dat2[,c(target,controls)]
+  if (is.null(controls)){
+    m1<-mean(as.matrix(dat1)[,1])
+    m2<-mean(as.matrix(dat2)[,1])
+    return(log(m1/m2,base = 2))
+  }
+  else{
+  value<-0
+  count<-0
+  countbad<-0
+  N1<-dim(dat1)[1]
+  N2<-dim(dat2)[1]
+  for (i in 1:samples)
+  {
+    if(Nc==1){x<-sample(t(dat1[,2]),1)}
+    else{x<-sample_n(dat1[,2:(Nc+1)],1)}
+    sub1<-dat1[FALSE,]
+    sub2<-dat2[FALSE,]
+    for (k in 1:N1)
+    { pair<-rbind(as.numeric(x),as.numeric(dat1[k,2:(Nc+1)]))
+      if(dist(pair,method = "euclidean")<=tolerance*sqrt(Nc)){sub1<-rbind(sub1,dat1[k,])}
+    }
+    for (k in 1:N2)
+    { pair<-rbind(as.numeric(x),as.numeric(dat2[k,2:(Nc+1)]))
+      if(dist(pair,method = "euclidean")<=tolerance*sqrt(Nc)){sub2<-rbind(sub2,dat2[k,])}
+    }
+    n1<-dim(sub1)[1]
+    n2<-dim(sub2)[1]
+    m1<-mean(as.matrix(sub1)[,1])
+    m2<-mean(as.matrix(sub2)[,1])
+    if(m1*m2==0 | is.na(m1/m2)){countbad<-countbad+1
+                    next}
+    else
+    {
+    count<-count+1
+    value<-value+log(m1/m2,2)
+    print(paste(signif(log(m1/m2,2),4), signif(value/count,4), sep = " _ "))
+    }
+    if(i%%10==0){print(i)}
+  }
+  if(countbad>0.75*samples){print(paste("Error: trouble with treatment",Treat,"and target", target, "Countbad=", countbad,sep = " "))}
+  return(value/count)
+  }
+}
+
+#Calculates conditional treatment effect on individual wells
+
+TreatWellCont<-function(data,Wells,target,controls,Compare="NT",tolerance=0.5,
+                            samples=min(10*(1/tolerance)^length(controls),200),onlypos=controls,samplecompare=10000)
+{
+  Nc<-length(controls)
+  dat1<-as.data.frame(subset(data,data$Well%in%Wells))
+  dat2<-as.data.frame(subset(data,data$Trt==Compare))
+  dat2<-sample_n(dat2,samplecompare,replace = TRUE)
+  
+  if(!is.null(onlypos)){
+    for (con in onlypos)
+    { dat1<-subset(dat1,dat1[,con]>0)
+      dat2<-subset(dat2,dat2[,con]>0)}
+  }
+  dat1<-dat1[,c(target,controls)]
+  dat2<-dat2[,c(target,controls)]
+  if (is.null(controls)){
+    m1<-mean(as.matrix(dat1)[,1])
+    m2<-mean(as.matrix(dat2)[,1])
+    return(log(m1/m2,base = 2))
+  }
+  else{
+  value<-0
+  count<-0
+  countbad<-0
+  N1<-dim(dat1)[1]
+  N2<-dim(dat2)[1]
+  for (i in 1:samples)
+  {
+    if(Nc==1){x<-sample(t(dat1[,2]),1)}
+    else{x<-sample_n(dat1[,2:(Nc+1)],1)}
+    sub1<-dat1[FALSE,]
+    sub2<-dat2[FALSE,]
+    for (k in 1:N1)
+    { pair<-rbind(as.numeric(x),as.numeric(dat1[k,2:(Nc+1)]))
+      if(dist(pair,method = "euclidean")<=tolerance*sqrt(Nc)){sub1<-rbind(sub1,dat1[k,])}
+    }
+    for (k in 1:N2)
+    { pair<-rbind(as.numeric(x),as.numeric(dat2[k,2:(Nc+1)]))
+      if(dist(pair,method = "euclidean")<=tolerance*sqrt(Nc)){sub2<-rbind(sub2,dat2[k,])}
+    }
+    n1<-dim(sub1)[1]
+    n2<-dim(sub2)[1]
+    m1<-mean(as.matrix(sub1)[,1])
+    m2<-mean(as.matrix(sub2)[,1])
+    if(m1*m2==0 | is.na(m1/m2)){countbad<-countbad+1
+                    next}
+    else
+    {
+    count<-count+1
+    value<-value+log(m1/m2,2)
+    print(paste(signif(log(m1/m2,2),4), signif(value/count,4), sep = " _ "))
+    }
+    if(i%%10==0){print(i)}
+  }
+  if(countbad>0.75*samples){print(paste("Error: trouble with well",Well,"and target", target, "Countbad=", countbad,sep = " "))}
+  return(value/count)
+  }
+}
+
+#Takes bootstrapping result (i.e. output from boot.strength) as "network", parent
+# node, child node, and returns numbers corresponding to all other parents
+#of child node
+
+ReturnParents<-function(from,to,network,
+                        names=c("Synapsin","GluR2","Homer","PSD95","Shank","Actin","Bassoon","vGlut"),
+                        strcutoff=0.8,dircutoff=0.6)
+{
+  network<-subset(network,network$strength>=strcutoff)
+  Fromnums<-mapvalues(network$from,names,1:length(names))
+  Tonums<-mapvalues(network$to,names,1:length(names))
+  Nedges<-length(Fromnums)
+  
+  loc<-which(Fromnums==from & Tonums==to)
+  if(length(loc)==0){return(0)}
+  else if(length(loc)>1){stop("Error:edge repeats twice")}
+  else
+  {
+    parents<-which(Tonums==to & Fromnums!=from & network$direction>1-dircutoff)
+    if (network$direction[loc]<dircutoff) {parents<-c(parents,which(Tonums==from & Fromnums!=to & network$direction>1-dircutoff))}
+  }
+  return(as.numeric(levels(factor(Fromnums[parents]))))
+}
+
+#Automatically calculates the strengths of all network edges in a data subset
+
+AllEdgeStrengths<-function(data,network,N = 8,names,strcutoff,dircutoff)
+{
+  RawEdges<-matrix(0, nrow = N, ncol = N)
+  ContEdges<-matrix(0, nrow = N, ncol = N)
+  
+  for (row in 1:N)
+  {
+    for (col in 1:N)
+    {
+      print(c(row,col))
+      p<-ReturnParents(row,col,network,names,strcutoff,dircutoff)
+      if(p[1]!=0)
+      {
+        RawEdges[row,col]<-cor(data[,..row],data[,..col])
+        ContEdges[row,col]<-EdgeStrengthCont(data,from = row,to = col,controls = p)
+      }
+    }
+  }
+  return(list(RawEdges,ContEdges))
+}
+
+#Returns all well names from a certain treatment group
+TrtGroup<-function(well,data)
+{x<-levels(factor(subset(data$Trt,data$Well==well)))
+  if(length(x)!=1){stop("ERROR")}
+  else return(x)}
+
+#Creates custom color map
+CreateColorMap<-function(colors,breaks,data,char=TRUE)
+{
+  N<-length(data)
+  M<-length(breaks)
+  if(char){col=character(N)}
+  else{col=numeric(N)}
+  for (i in 1:N)
+  {if(breaks[1]>data[i]){wh<-1}
+   else {wh<-max(which(breaks<data[i]))}
+   col[i]<-colors[wh+1]}
+  return(col)
+}
+
+#Calculates  mutual information between X and Y conditional on conts
+ContMutInf<-function(data,X,Y,conts)
+{return(entropy(data[,c(X,conts)])+entropy(data[,c(Y,conts)])-entropy(data[,c(X,Y,conts)])-entropy(data[,conts]))}
+
+
+#Function to progress an N-variable distribution by a certain number of noisy 
+#linear steps with a constant input
+#X(t+1)=(1+nsO)*[M*(1+nsM)*X(t)*(1+nsX)+input]
+#M is the NxN interaction matrix (x(t+1)=M*x(t))
+#dat is the distribution (data frame with N columns)
+#steps is number of steps to propagate
+#noisein, noiseout, noiseM are sd of gaussian with center 1 to multiply input,
+#output and matrix
+
+Linstep<-function(M,dat,steps=1,noisein=0,noiseout=0,noiseM=0,input=0)
+{
+  if(steps==1)
+  {
+  inp<-input*abs(rnorm(length(input),mean = 1,sd=noisein))
+  Mn<-M*abs(rnorm(prod(dim(M)),mean = 1,sd=noiseM))
+  b<-apply(dat,MARGIN = 1,FUN = function(v){M%*%v+inp})
+  b<-as.data.frame(t(b))
+  names(b)<-names(dat)
+  N<-prod(dim(dat))
+  b<-b*abs(rnorm(N,mean = 1,sd = noiseout))
+  return(b)
+  }
+  else
+  {
+  updat<-Linstep(M,dat,steps=1,noisein=noisein,noiseout = noiseout,noiseM = noiseM,input = input)
+  return(Linstep(M,updat,steps=steps-1,noisein=noisein,noiseout = noiseout,noiseM = noiseM,input = input))
+  }
+}
+
+#Functions to test similarity of distributions:
+
+#tests the probability of a certain point against distributions defined by dat
+#of gaussians. Each gaussians sigma is stdev of underlying points divided by
+#precfactor
+TestPointGauss<-function(dat,point,precfactor,sigmas=apply(dat,2,sd)/precfactor,initrestrict=5)
+{
+  if(dim(dat)[2]!=length(point)){stop("Point doesn't match dimensions of data")}
+  P<-0
+  for (row in 1:dim(dat)[1])
+  {
+    pr<-1
+    for (col in 1:dim(dat)[2])
+    {
+      s<-sigmas[col]/precfactor
+      x<-((dat[row,col]-point[col])/s)^2
+      if(x>initrestrict^2){pr<-0
+                            break}
+      else{pr<-pr*exp(-0.5*x)/(s*2.50663)}
+    }
+    P<-P+pr
+  }
+  return(P/dim(dat)[1])
+}
+
+TestPointNH<-function(dat,point,eps)
+{
+  if(dim(dat)[2]!=length(point)){stop("Point doesn't match dimensions of data")}
+  N<-dim(dat)[1]
+  pointrep<-matrix(rep(point,each=N),nrow = N)
+  dif<-dat-pointrep
+  difnorm<-apply(dif,1,function(x){Norm(x,p=2)})
+  count<-sum(difnorm<eps)
+  return((count+1)/N)
+}
+
+TestSetNH<-function(dat1,dat2,sub1 = 100, sub2 = "All", eps=0.5)
+{
+  if(sub1=="All"){d1<-dat1
+                  N<-dim(dat1)[1]}
+  else {d1<-sample_n(dat1,sub1)
+        N<-sub1}
+  if(sub2=="All"){d2<-dat2}
+  else {d2<-sample_n(dat2,sub2)}
+  
+  sumlogs<-0
+  
+  for (i in 1:N)
+  {
+    p<-TestPointNH(d2,as.numeric(d1[i,]),eps)
+    sumlogs<-sumlogs-log(p)
+  }
+  return(sumlogs/sub1)
+}
+
+```
+
+EXAMPLES OF SIMULATED STATIC NETWORKS AND NETWORK INFERENCE
+
+```{r}
+#Create Network that is A,B,C|(AB),D|A
+
+A<-Sample(N=10000)
+B<-Sample(N=10000)
+C<-CondSamp(c(TRUE,FALSE),cbind(A,B),effsize = c(0.3,0.1))
+D<-CondSamp(TRUE,as.matrix(A))
+a<-Disc(A,200)
+b<-Disc(B,200)
+c<-Disc(C,200)
+d<-Disc(D,200)
+
+dat<-as.data.table(cbind(a,b,c,d))
+BN<-tabu(dat)
+Bass<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
+
+#Making network: A, B, C|A, D, E|(D,C), F|(B,D)
+
+A<-Sample(N=10000)
+B<-Sample(N=10000)
+C<-CondSamp(TRUE,as.matrix(A))
+D<-Sample(N=10000)
+E<-CondSamp(c(TRUE,TRUE),cbind(C,D),effsize = c(0.2,1))
+G<-CondSamp(c(TRUE,TRUE),cbind(B,D),effsize = c(1,1))
+a<-Disc(A,20)
+b<-Disc(B,20)
+c<-Disc(C,20)
+d<-Disc(D,20)
+e<-Disc(E,20)
+g<-Disc(G,20)
+dat<-as.data.table(cbind(a,b,c,d,e,g))
+BN<-tabu(dat)
+Bass<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
+```
+
+
+```{r}
+#Making network: A, B, C|(A,B), D|B, E|(J,C,D), G|(B,E), H|(E,C,J), I|(B,D,G) ,J|C
+al<-1
+A<-Sample(N=20000)
+B<-Sample(N=20000)
+C<-CondSamp(c(TRUE,TRUE),cbind(A,B),effsize = c(1*al,0.2*al))
+D<-CondSamp(c(TRUE),cbind(B),effsize = c(0.5*al))
+J<-CondSamp(c(TRUE),cbind(C),effsize = c(0.6*al))
+E<-CondSamp(c(TRUE,TRUE,TRUE),cbind(C,D,J),effsize = c(0.8*al,1*al,0.7*al))
+G<-CondSamp(c(TRUE,TRUE),cbind(E,B),effsize = c(0.5*al,0.4*al))
+H<-CondSamp(c(TRUE,TRUE,TRUE),cbind(C,E,J),effsize = c(0.2*al,0.4*al,1*al))
+I<-CondSamp(c(TRUE,TRUE,TRUE),cbind(B,D,G),effsize = c(0.1*al,0.4*al,1*al))
+
+vars<-c("A","B","C","D","E","G","H","I","J")
+
+dat<-cbind(A,B,C,D,E,G,H,I,J)
+data<-as.data.frame(dat)
+names(data)<-vars
+dat<-as.data.frame(Disc(dat,20))
+names(dat)<-vars
+ordat<-dat
+ordat[]<-lapply(ordat,as.ordered)
+names(ordat)<-vars
+
+
+iamb1<-boot.strength(ordat,R=200,m=500,algorithm = "iamb")
+interiamb1<-boot.strength(ordat,R=200,m=500,algorithm = "inter.iamb")
+fdr1<-boot.strength(ordat,R=200,m=500,algorithm = "iamb.fdr")
+mmpc1<-boot.strength(dat,R=500,m=3000,algorithm = "mmpc")
+tabu2<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
+mmhc1<-boot.strength(dat,R=500,m=3000,algorithm = "mmhc")
+h2pc1<-boot.strength(dat,R=500,m=3000,algorithm = "h2pc")
+
+AC_B<-EdgeStrengthCont(data,1,3,2)
+BC_A<-EdgeStrengthCont(data,2,3,1)
+CJ<-EdgeStrengthCont(data,3,9,NULL)
+CE_DJ<-EdgeStrengthCont(data,3,5,c(4,9))
+DE_CJ<-EdgeStrengthCont(data,4,5,c(3,9))
+JE_CD<-EdgeStrengthCont(data,9,5,c(3,4))
+CH_EJ<-EdgeStrengthCont(data,3,7,c(5,9))
+EH_CJ<-EdgeStrengthCont(data,5,7,c(3,9))
+JH_CE<-EdgeStrengthCont(data,9,7,c(3,5))
+BD<-EdgeStrengthCont(data,2,4,NULL)
+BG_E<-EdgeStrengthCont(data,2,6,5)
+EG_B<-EdgeStrengthCont(data,5,6,2)
+BI_DG<-EdgeStrengthCont(data,2,8,c(4,6))
+DI_BG<-EdgeStrengthCont(data,4,8,c(2,6))
+GI_BD<-EdgeStrengthCont(data,6,8,c(2,4))
+
+#Making Network
+
+```
+
+```{r}
+#Making network with cycles: A, B|(A,H),C|(A,D),D|(E,B),E|C ,G|D, H|G, I|E,G
+
+A<-Sample(N=20000)
+B1<-CondSamp(c(TRUE),cbind(A),effsize = c(0.1*al))
+C1<-CondSamp(c(TRUE),cbind(A),effsize = c(0.7*al))
+E<-CondSamp(c(TRUE),cbind(C1),effsize = c(0.8*al))
+D<-CondSamp(c(TRUE,TRUE),cbind(B1,E),effsize = c(1*al,0.6*al))
+C2<-CondSamp(c(TRUE),cbind(D),effsize = c(0.4*al))
+C<-0.5*(C1+C2)
+G<-CondSamp(c(TRUE),cbind(D),effsize = c(0.3*al))
+H<-CondSamp(c(TRUE),cbind(G),effsize = c(0.8*al))
+B2<-CondSamp(c(TRUE),cbind(H),effsize = c(0.3*al))
+B<-0.5*(B1+B2)
+I<-CondSamp(c(TRUE,TRUE),cbind(E,G),effsize = c(0.1*al,0.4*al))
+
+vars<-c("A","B","C","D","E","G","H","I")
+
+dat<-cbind(A,B,C,D,E,G,H,I)
+data<-as.data.frame(dat)
+names(data)<-vars
+dat<-as.data.frame(Disc(dat,20))
+names(dat)<-vars
+ordat<-dat
+ordat[]<-lapply(ordat,as.ordered)
+names(ordat)<-vars
+
+tabu1<-boot.strength(dat,R=500,m=3000,algorithm = "tabu")
+
+CA<-EdgeStrengthCont(data,1,3,NULL)
+DC_E<-EdgeStrengthCont(data,4,3,5)
+EC_D<-EdgeStrengthCont(data,5,3,4)
+ED_B<-EdgeStrengthCont(data,5,4,2)
+BD_E<-EdgeStrengthCont(data,2,4,5)
+BH<-EdgeStrengthCont(data,2,7,NULL)
+DG_H<-EdgeStrengthCont(data,4,6,7)
+HG_D<-EdgeStrengthCont(data,7,6,4)
+GI<-EdgeStrengthCont(data,6,8,NULL)
+
+```
+
+
+```{r}
+#Create a simulated dynamic network of A, B|A, C|B, D|C, E|B,C by starting with
+#independent variables and propagating
+A<-Sample(N=10000,P=1.2,sh=3)
+B<-Sample(N=10000,P=1.2,sh=0.2)
+C<-Sample(N=10000,P=1.2,sh=0.2)
+D<-Sample(N=10000,P=1.2,sh=0.2)
+E<-Sample(N=10000,P=1.2,sh=0.2)
+dat1<-as.data.frame(cbind(A,B,C,D,E))
+names(dat1)<-c("A","B","C","D","E")
+M1<-t(matrix(c(0.8,0,0,0,0,0.2,0.8,0,0,0,0,0.2,0.8,0,0,0,0,0.2,0.8,0,0,0.2,0.2,0,0.8),nrow = 5,ncol=5))
+
+
+```
+
