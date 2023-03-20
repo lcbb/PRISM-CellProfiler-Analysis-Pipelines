@@ -1,0 +1,1026 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+path = 'C:/Users/Eric Danielson/Desktop/PRISM-TTX/KP20180816'
+merge_PRISM_data(path)
+```
+```{r}
+path = 'C:/Users/Eric Danielson/Desktop/PRISM-TTX/KP20181204'
+merge_PRISM_data(path)
+```
+```{r}
+library(dplyr)
+path ="D:/CP Projected/CP output/Dendrite-Mask/20190924 Pre-50-overlap/data/"
+merge_plate_data(path)
+
+```
+
+
+
+```{r}
+require(data.table)
+require(dplyr)
+data=fread("C:/Users/Eric Danielson/Desktop/PRISM-TTX/data/raw_filtered/Synapsin1Rep1.csv")
+
+#data=fread("D:/CP Projected/CP output/siRNAR1_1/data/raw/raw.csv")
+index=-grep("Location",names(data))
+data=data[,..index]
+index=-grep("Center",names(data))
+data=data[,..index]
+index=grep("Distance",names(data))
+d=is.na(data[,..index])
+e=data[,..index]
+e[d]=14
+data[,index]=e
+index=grep("Intensity",names(data))
+e=data[,..index]
+d=is.na(data[,..index])
+e[d]=0
+data[,index]=e
+index=grep("AreaShape_Area",names(data))
+e=data[,..index]
+d=is.na(data[,..index])
+e[d]=0
+data[,index]=e
+
+data=data[data$Well != "r07c07",]
+
+
+subset=data
+
+subset=subset[subset$SynapseType!="Mixed",]
+subset=subset[subset$SynapseType!="Unknown",]
+
+subset=group_by(subset,Well,SynapseType,Date,Treatment)
+
+```
+```{r}
+index=c(1,566,567,568,569)
+for(k in 3:563)
+{
+  if(sum(is.na(subset[,k]))==0)
+  {
+    if(sd(unlist(subset[,k]))!=0)
+    {
+      index=c(index,k)
+    }
+  }
+}
+
+subset2=subset[,index]
+```
+```{r}
+require(caret)
+reduced_data=findCorrelation(cor(subset2[,6:ncol(subset2)]))
+index=5+reduced_data
+index=c(1:5,index)
+index=-1*index
+```
+
+
+```{r}
+subset3=group_by(subset2,Treatment,Well)
+subset4=sample_n(subset3,2000)
+#save subset4 somewhere
+```
+
+```{r}
+require(umap)
+u=umap(scale(subset4[,index]))
+#fwrite(u$layout,"umap_large_new.csv")
+```
+
+```{python}
+import numpy as np
+from numpy import genfromtxt
+from numpy import savetxt
+import csv
+import hdbscan
+path="C:/Users/Administrator/Documents/umap_largenew.csv"
+my_data = genfromtxt(path, delimiter=',')
+clusterer = hdbscan.HDBSCAN(min_cluster_size=80) #prediction_data=True
+clusterer.fit(my_data[1:,])
+out_path="C:/Users/Administrator/Documents/clusters_ttx.csv"
+savetxt(out_path,clusterer.labels_,delimiter=',')
+
+```
+
+```{r}
+savetxt(out_path,clusterer.labels_,delimiter=',')
+```
+
+```{r}
+require(ggplot2)
+xy=as.data.frame(u$layout)
+names(xy)=c("X","Y")
+xy$SynapseType=subset4$SynapseType
+xy$ImageNumber=subset4$ImageNumber
+xy$Treatment=subset4$Treatment
+xy$UMAP=factor(1+unlist(fread("clusters.csv")))
+ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point()
+
+```
+
+```{r}
+xy2=xy
+xy2$Well=subset4$Well
+xy2$ImageNumber=subset4$ImageNumber
+a=aggregate(X ~ UMAP + Treatment+Well,xy2,length)
+b=normalize_umap_density(a)
+b$Treatment=relevel(factor(b$Treatment),ref="UT")
+ggbarplot(b[b$UMAP!=0,],x='UMAP',y='X',fill='Treatment',add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(aes(group=Treatment),label="p.signif")
+
+```
+
+```{r}
+xy2=xy
+up1a=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point(size=pointsize)+
+    #xlim(xlimit)+ylim(ylimit)+
+    theme_classic()+
+    xlab(element_blank())+
+    ylab(element_blank())+
+    theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+    ggtitle("a")+stat_ellipse()
+
+xy2$UMAP=factor(cutree(dendogram,8))
+up1b=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point(size=pointsize)+
+    #xlim(xlimit)+ylim(ylimit)+
+    theme_classic()+
+    xlab(element_blank())+
+    ylab(element_blank())+
+    theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+    ggtitle("b")+stat_ellipse()
+
+xy2$UMAP=factor(cutree(dendogram,15))
+up1c=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point(size=pointsize)+
+    #xlim(xlimit)+ylim(ylimit)+
+    theme_classic()+
+    xlab(element_blank())+
+    ylab(element_blank())+
+    theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+    ggtitle("c")+stat_ellipse()
+
+up2=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = c(0.8,0.2),text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle("d")
+
+up3=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     facet_wrap(~Treatment,ncol = 1)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle("e")
+```
+```{r}
+xy2=xy
+xy2$ColorVals=unlist(subset4$Children_Homer1bc_Count)
+  hom=plot_umap(xy2,"Homer1b/c")
+  
+  xy2$ColorVals=unlist(subset4$Children_PSD95_Count)
+  psd=plot_umap(xy2,"PSD-95")
+  
+  xy2$ColorVals=unlist(subset4$Children_Shank3_Count)
+  sha=plot_umap(xy2,"SHANK3")
+  
+  xy2$ColorVals=unlist(subset4$Children_NR2B_Count)
+  nr2=plot_umap(xy2,"NR2B")
+  
+  xy2$ColorVals=unlist(subset4$Children_actin_Count)
+  act=plot_umap(xy2,"actin")
+  
+  xy2$ColorVals=unlist(subset4$Children_cortactin_Count)
+  cor=plot_umap(xy2,"cortactin")
+  
+  xy2$ColorVals=unlist(subset4$Children_Gephyrin_Count)
+  gep=plot_umap(xy2,"Gephyrin")
+  
+  xy2$ColorVals=unlist(subset4$Children_vgat_Count)
+  vga=plot_umap(xy2,"vGAT")
+  
+  xy2$ColorVals=unlist(subset4$Children_bassoon_Count)
+  bas=plot_umap(xy2,"bassoon")
+  
+  xy2$ColorVals=unlist(subset4$Children_vGlut_Count)
+  vgl=plot_umap(xy2,"vGlut1")
+  
+  
+  
+  #{hom|psd|sha|nr2|gep}/{act|cor|bas|vgl|vga}
+  #hom|psd|sha|nr2|gep}/{act|cor|bas|vga}
+```
+
+```{r}
+require(reshape2)
+data$ImageNumber=factor(data$ImageNumber)
+for(k in 15:30)#ncol(data))
+{
+columns= c("ImageNumber","Treatment","Well",names(data)[k])
+temp=data[,..columns]
+temp = melt(temp,id.vars = c("ImageNumber","Treatment","Well"))
+lim=quantile(na.omit(temp$value),c(0.25,.75))
+iqr=lim[2]-lim[1]
+lower = lim[1]-(1.5*iqr)
+upper = lim[2]+(1.5*iqr)
+temp$value[temp$value<lower]=NA
+temp$value[temp$value>upper]=NA
+temp=na.omit(temp)
+#lim=quantile(na.omit(temp$value),c(0.01,.99))
+plot(ggplot(temp,aes(x=value,y=Well,fill=Treatment,alpha=0.5))+
+       stat_density_ridges(quantile_lines = T,quantiles = c(0.025,0.975),scale=1) + 
+       xlab(names(data)[k]) #+
+       #xlim(lim)
+     
+       )
+}
+```
+
+```{r}
+pointsize=0.25
+#xlimit=c(-10,10)
+#ylimit=c(-10,10)
+xy2$UMAP=factor(xy2$UMAP)
+xy2$Treatment=relevel(factor(xy2$Treatment),ref="UT")
+up1=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = c(0.9,0.7),text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle("a")
+
+up2=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = "right",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle("b")
+
+up3=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     facet_wrap(~Treatment)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle("c")
+
+plot(up1 | {up2/up3})
+```
+
+
+```{r}
+sample_number=2000
+files=list.files("D:/CP Projected/CP output/siRNAR1_1/data/raw",pattern="\\.csv$",full.names = T)
+subset=NA
+first=TRUE
+for(k in 1:length(files))
+{
+  data=fread(files[k])
+  data=group_by(data,Well)
+  if(first)
+   {
+    subset=sample_n(data,sample_number)
+    first=FALSE
+  }
+  else
+    {
+      temp=sample_n(data,sample_number)
+      subset=merge(subset,temp,all=T)
+    }
+}
+
+index=c(1,516:519)
+for(k in 3:513)
+{
+  if(sum(is.na(unlist(subset[,k])))==0)
+  {
+    if(sd(unlist(subset[,k]))!=0)
+    {
+      index=c(index,k)
+    }
+  }
+}
+subset2=subset[,index]
+```
+
+
+```{r}
+index=c(1:5)
+#subset$Treatment = "UT"
+#subset$Treatment[grep('r0[5,6,7]',subset$Well)]="TTX"
+for(k in 6:ncol(subset2))
+{
+  temp = data.frame(Well=subset2$Well,Treatment=subset2$Treatment)
+  temp$value = unlist(subset2[,k])
+  #print(temp[1:10,])
+  a = aggregate(value ~ Treatment + Well,temp,mean)
+  r = compare_means(value ~ Treatment,a,method="anova")
+  #r=ks.test(na.omit(unlist(subset2[subset$Treatment=="UT",k])),unlist(subset2[subset$Treatment=="TTX",k]))
+  
+  if(r$p < 0.05)
+  {
+      index=c(index,k)
+    #print(k)
+  }
+}
+#subset3=subset2[,index]
+```
+
+```{r}
+#figure 4
+xy2=xy
+xy2$Treatment=relevel(factor(xy2$Treatment),ref="UT")
+umap_plot=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=UMAP))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+#c(0.8,0.7)
+     theme(legend.position = c(0.8,0.7),text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+stat_ellipse()#+
+  #ggtitle("d")
+
+intensity_plot={hom|psd|sha}/{cor|vgl|vga}+ggtitle("c")
+
+treatment_plot=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     facet_wrap(~Treatment,ncol = 1)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank(),strip.background = element_blank(), strip.text = element_blank())#+
+  #ggtitle("b")
+
+synapse_plot=ggplot(xy2[xy2$UMAP!=0,],aes(x=X,y=Y,color=SynapseType))+geom_point(size=pointsize)+
+     #xlim(xlimit)+ylim(ylimit)+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+#c(0.7,0.9)
+     theme(legend.position = "none" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())#+
+  #ggtitle("a")
+```
+
+```{r}
+png("fig4.png",width=6.5,height=7,units = "in",res=300)
+print({synapse_plot|treatment_plot}/{intensity_plot|umap_plot})
+dev.off()
+
+pdf("fig4a.pdf",width=3.25,height=3.75)
+print(synapse_plot)
+dev.off()
+
+pdf("fig4b.pdf",width=3.25,height=3.75)
+print(treatment_plot)
+dev.off()
+
+pdf("fig4c.pdf",width=3.25,height=3.75)
+print(intensity_plot)
+dev.off()
+
+pdf("fig4d.pdf",width=3.25,height=3.75)
+print(umap_plot)
+dev.off()
+
+```
+
+```{r}
+pdf("mult_umap.pdf",width=6.5,height=6.5)
+for(k in 6:ncol(subset4))
+{
+  minmax=quantile(unlist(subset4[,k]),probs=c(0.01,.99))
+  vbreaks=seq(from=minmax[1],to=minmax[2],length.out=6)
+  values=as.numeric(unlist(subset4[xy$UMAP!=0,k]))
+  
+  p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y))+geom_point(size=pointsize,aes(color=values)) +
+    scale_color_gradient(low="black",high="green",breaks=vbreaks,limits=minmax,labels=format(vbreaks,digits=2))+
+     theme_classic()+
+     xlab(element_blank())+
+     ylab(element_blank())+
+     theme(legend.position = c(0.9,0.7),text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank(),plot.title = element_text(hjust = 0.5))+
+    ggtitle(names(subset4[,k]))
+  
+  plot(p)
+}
+dev.off()
+```
+
+```{r}
+
+first=TRUE
+for(k in 1:10)
+{
+print(k)
+t=sample_n(subset3,500)
+u2=predict(u,scale(t[,index]))
+u2=data.frame(u2)
+names(u2)=c("X","Y")
+u2$Treatment=t$Treatment
+u2$Well=t$Well
+u2$Rep=k
+if(first)
+{
+  fwrite(u2[,1:2],"new_data.csv")
+  fwrite(u2,"random_umap.csv")
+  first=FALSE
+}
+else
+{
+  fwrite(u2[,1:2],"new_data.csv",append = T)
+  fwrite(u2,"random_umap.csv",append = T)
+}
+
+
+}
+
+```
+```{r}
+gep=ggbarplot(rnai_intensity3,x="Treatment",y="Gephyrin",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("Gephyrin")
+glu=ggbarplot(rnai_intensity3,x="Treatment",y="GluR2",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("GluR2")
+hom=ggbarplot(rnai_intensity3,x="Treatment",y="Homer1bc",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("Homer")
+nr2=ggbarplot(rnai_intensity3,x="Treatment",y="NR2B",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("NR2A")
+psd=ggbarplot(rnai_intensity3,x="Treatment",y="PSD95",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("PSD-95")
+sha=ggbarplot(rnai_intensity3,x="Treatment",y="Shank3",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("Shank-3")
+act=ggbarplot(rnai_intensity3,x="Treatment",y="actin",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("actin")
+bas=ggbarplot(rnai_intensity3,x="Treatment",y="bassoon",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("bassoon")
+vga=ggbarplot(rnai_intensity3,x="Treatment",y="vGAT",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("vGAT")
+syn=ggbarplot(rnai_intensity3,x="Treatment",y="synapsin",add=c("mean_ci","point"),position=position_dodge(0.8))+stat_compare_means(ref.group = "UT",label="p.signif",method="t.test",hide.ns=F)+
+  xlab(element_blank())+
+  ylab(element_blank())+
+  theme(text = element_text(size=10),axis.ticks.length=unit(-0.10,"cm"),plot.title = element_text(hjust = 0.5))+
+  ggtitle("synapsin")
+
+```
+
+```{r}
+ pdf("rnai_bar.pdf",width=15,height=7.5,useDingbats = F)
+print(syn+bas+nr2+glu+hom+psd+sha+act+vga+gep+plot_layout(nrow=3))
+dev.off()
+```
+```{r}
+png("rnai_umap.png",width=15,height=5,units="in",res=300)
+print(rnai_plot+theme(panel.background = element_rect(fill = "transparent",colour = NA),legend.position = "none",text = element_text(size=12),axis.ticks.length=unit(-0.10,"cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+xlab(element_blank())+ylab(element_blank()))
+dev.off()
+
+
+
+```
+```{python}
+
+```
+
+```{r}
+p=NULL
+out = NULL
+
+for(k in c(7,8,9,10,11,12,14,15,17,18,19,20))
+{
+xy$Color=data.frame(subset4)[,k]
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(names(data.frame(subset4))[k])
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S7.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+
+```{r}
+p=NULL
+out = NULL
+
+for(k in c(27,23,25,24,22,28,26,21,29,30))
+{
+xy$Color=data.frame(subset4)[,k]
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(names(data.frame(subset4))[k])
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S8.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(54,365,331,263,297,280,246,348,314,382,229)
+n=names(subset4)
+n[54]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S9.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+
+for(k in c(27,23,25,24,22,28,26,21,29,30))
+{
+xy$Color=data.frame(subset4)[,k]
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(names(data.frame(subset4))[k])
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S8.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(42,365,331,263,297,280,246,348,314,382,229)
+index = index-1
+n=names(subset4)
+n[41]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S10.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(66,365,331,263,297,280,246,348,314,382,229)
+index = index+1
+n=names(subset4)
+n[67]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S11.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(78,365,331,263,297,280,246,348,314,382,229)
+index = index+2
+n=names(subset4)
+n[80]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S12.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(93-3,365,331,263,297,280,246,348,314,382,229)
+index = index+3
+n=names(subset4)
+n[93]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S13.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=132
+offset=9
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(syn_index-offset,365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+n=names(subset4)
+n[syn_index]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S14.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=158
+offset=10
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(syn_index-offset,365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+n=names(subset4)
+n[syn_index]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S15.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=197
+offset=11
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(syn_index-offset,365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+n=names(subset4)
+n[syn_index]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S16.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=223
+offset=13
+index = grep("_Intensity_IntegratedIntensity_",names(subset4))
+index = c(54,index)
+index=c(syn_index-offset,365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+n=names(subset4)
+n[syn_index]="Mean_synapsin-I_Intensity_IntegratedIntensity_Cropsynapsin1rep1"
+for(k in index)
+{
+xy$Color=log(1+data.frame(subset4)[,k])
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="black",high="green")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S17.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=223
+offset=-3
+index=c(365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+for(k in index)
+{
+xy$Color=data.frame(subset4)[,k]
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="green",high="black")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S18.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+```{r}
+p=NULL
+out = NULL
+syn_index=223
+offset=-2
+index=c(365,331,263,297,280,246,348,314,382,229)
+index = index+offset
+for(k in index)
+{
+xy$Color=data.frame(subset4)[,k]
+ub=as.numeric(format(quantile(data.frame(subset4)[,k]),digits=2))
+p=ggplot(xy[xy$UMAP!=0,],aes(x=X,y=Y,color=Color))+geom_point(size = 0.25, stroke = 0, shape = 16)+facet_wrap(~Treatment)+
+  scale_color_gradient(low="green",high="black")+
+  theme_classic()+
+  xlab(element_blank())+
+  ylab(element_blank())+#c(0.7,0.9)
+  theme(legend.position = "right" ,text = element_text(size=12),axis.ticks.length=unit(-0.10, "cm"),axis.text.x=element_blank(),axis.text.y=element_blank())+
+  ggtitle(get_protein_name(n[k]))
+
+
+if(is.null(out))
+  out = p
+else
+  out = out + p
+}
+pdf("S19.pdf",width = 13,height=4*3,useDingbats = F)
+print(out+plot_layout(ncol=4))
+dev.off()
+```
+
+```{python}
+import umap
+import pandas as pd
+path = ' '
+out_path = ''
+reducer = umap.UMAP()
+data = pd.read_csv(path)
+scaled_data=StandardScaler().fit_transform(data[,6:])
+embedding = reducer.fit_transform(scaled_data)
+out = pd.DataFrame(embedding)
+out.to_csv(out_path)
+```
+
+
+```{r}
+path<-"C:/Users/Beny Falkovich/Data/siRNA reanalyses/Postsynaptic Identification/CP Output/PRISM-siRNA-R3_Aligned/"
+l<-list.files(path)
+data<-fread(paste(path,l[2],"/PostSyn.csv",sep = ""))
+Well<-character()
+for (folder in l[3:51])
+{
+  print(folder)
+  p<-paste(path,folder,"/PostSyn.csv",sep = "")
+  x<-fread(p)
+  Well<-c(Well,rep(folder,dim(x)[1]))
+  data<-rbind(data,x)
+}
+data<-cbind(data,Well)
+fwrite(data,"C:/Users/Beny Falkovich/Data/siRNA reanalyses/Postsynaptic Identification/CP Output/PRISM-siRNA-R3_Aligned/AllSynapses.csv")
+data<-fread("C:/Users/Beny Falkovich/Data/siRNA reanalyses/Postsynaptic Identification/CP Output/PRISM-siRNA-R3_Aligned/AllSynapses.csv")
+data<-as.data.frame(data)
+N<-dim(data)[1]
+Type<-character(N)
+for (i in 1:N){
+  if(data$Children_vGlut1_Count[i]>0){
+    if(data$Children_vgat_Count[i]==0){Type[i]<-"Excitatory"}
+    else{Type[i]<-"Mixed"}
+  }
+  else{
+    if(data$Children_vgat_Count[i]==0){Type[i]<-"None"}
+    else{Type[i]<-"Inhibitory"}
+  }
+}
+data<-cbind(data,Type)
+data<-subset(data,data$Type %in% c("Excitatory","Inhibitory"))
+intensitiescrop<-c(44,115,186,257,328,399,472,562,633,704,775)
+intensitiesraw<-intensitiescrop+1
+data<-data[,c(3:13,intensitiescrop,820,821)]
+dat<-data[,1:11]
+for (col in 12:22){dat[,(col-11)]<-dat[,(col-11)]*data[,..col]}
+dat[is.na(dat)]<-0
+dat<-cbind(dat,data$Type)
+names(dat)<-c("Gephyrin","GluR2","Homer","NR2B","PSD95","Shank","Synapsin","Actin","Bassoon","vGlut","vGAT","Type")
+Ex<-subset(dat[,c(-1,-4,-11,-12)],dat$Type=="Excitatory")
+samp<-sample_n(Ex,30000)
+
+
+
+
+dat<-data[,3:13]
+usecrop=TRUE
+if(usecrop)
+{
+  intensities<-c(44,115,186,257,328,399,472,562,633,704,775)
+  for (i in 1:11){dat[,i]<-dat[,i]*data[,intensities[i]]}
+}
+
+
+```
+
+```{r}
+path<-"C:/Users/Beny Falkovich/Data/siRNA reanalyses/Postsynaptic Identification/CP Output EI ratio calculation low VGlut thresh/PRISM-siRNA-R1_Aligned/"
+l<-list.files(path)
+data<-fread(paste(path,l[3],"/Synapsin1.csv",sep = ""))
+w<-paste("P1_",strsplit(l[3],split = ""),sep = "")
+Well<-rep(w,dim(data)[1])
+for (folder in l[4:length(l)])
+{
+  print(folder)
+  p<-paste(path,folder,"/Synapsin1.csv",sep = "")
+  x<-fread(p)
+  w<-paste("P1_",strsplit(folder,split = ""),sep = "")
+  Well<-c(Well,rep(w,dim(x)[1]))
+  data<-rbind(data,x)
+}
+data<-cbind(data,Well)
+```
+
